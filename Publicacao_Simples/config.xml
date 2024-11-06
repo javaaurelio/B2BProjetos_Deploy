@@ -1,0 +1,127 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job@1436.vfa_244484591f">
+  <actions>
+    <org.jenkinsci.plugins.pipeline.modeldefinition.actions.DeclarativeJobAction plugin="pipeline-model-definition@2.2205.vc9522a_9d5711"/>
+    <org.jenkinsci.plugins.pipeline.modeldefinition.actions.DeclarativeJobPropertyTrackerAction plugin="pipeline-model-definition@2.2205.vc9522a_9d5711">
+      <jobProperties/>
+      <triggers/>
+      <parameters>
+        <string>Versao</string>
+      </parameters>
+      <options/>
+    </org.jenkinsci.plugins.pipeline.modeldefinition.actions.DeclarativeJobPropertyTrackerAction>
+  </actions>
+  <description></description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <net.uaznia.lukanus.hudson.plugins.gitparameter.GitParameterDefinition plugin="git-parameter@0.10.0">
+          <name>Versao</name>
+          <uuid>9a5a38ed-bc82-4004-a3c2-319e34e28ca4</uuid>
+          <type>PT_TAG</type>
+          <tagFilter>*</tagFilter>
+          <branchFilter>.*</branchFilter>
+          <sortMode>DESCENDING_SMART</sortMode>
+          <defaultValue>master</defaultValue>
+          <listSize>5</listSize>
+          <requiredParameter>false</requiredParameter>
+        </net.uaznia.lukanus.hudson.plugins.gitparameter.GitParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps@3943.v3519a_3260660">
+    <script>pipeline {
+    
+   
+    agent any
+    options {
+      timeout(time: 2, unit: &apos;MINUTES&apos;) 
+    }
+    environment {
+        unique_Id = UUID.randomUUID().toString()
+    }
+    parameters {
+        gitParameter name: &apos;Versao&apos;,
+                     type: &apos;PT_TAG&apos;,
+                     defaultValue: &apos;master&apos;,
+                     sortMode: &apos;DESCENDING_SMART&apos;
+    }
+    stages {
+        stage(&apos;Checkout - Tag&apos;) {
+            
+            steps {
+                
+                checkout([$class: &apos;GitSCM&apos;,
+				branches: [[name: &quot;${params.Versao}&quot;]],
+				doGenerateSubmoduleConfigurations: false,
+				extensions: [],
+				gitTool: &apos;Default&apos;,
+				submoduleCfg: [],
+				userRemoteConfigs: [[url: &apos;https://github.com/javaaurelio/B2BProjetos_Deploy.git&apos;]]])
+            }
+        }
+		stage(&apos;Pre-Configuracao&apos;) {
+            steps {
+                
+                echo &apos;Criando diretorio temp...&apos;
+			    sshagent([&apos;login_ssh_servidor_si&apos;]) {
+                    sh &quot;ssh -o StrictHostKeyChecking=no -l admin bastion-gym-lan &apos;mkdir -p /tmp/jenkins/$BUILD_TAG &apos; &quot;
+			    }
+            
+			    echo &apos;Enviando arquivo para servidor...&apos;
+			    sshagent([&apos;login_ssh_servidor_si&apos;]) {
+                    sh &quot;scp Projeto_Inicial_Export.xml admin@bastion-gym-lan:/tmp/jenkins/$BUILD_TAG/Export.xml &quot;
+			    }
+            }
+        }
+    stage(&apos;Publicando&apos;) {
+            steps {
+                sshagent([&apos;login_ssh_servidor_si&apos;]) {
+                    script {
+                        
+                        try {
+                           
+                               sh(&quot;ssh -o StrictHostKeyChecking=no -l admin localhost &apos;/opt/IBM/SI62/tp_import/import.sh -numberOfThreads 5 -update -input /tmp/jenkins/$BUILD_TAG/Export.xml -report /tmp/jenkins/$BUILD_TAG/SAIDA.report &gt; /tmp/jenkins/$BUILD_TAG/SAIDA_COMMANDO.log | exit 0; &apos;&quot;)
+                                             
+                          
+                        } catch (err) {
+                            print(&apos;ERROR: &apos; + err.toString() )
+                            error &apos;ERRO ao executar script B2Bi import.sh &apos;
+                        }
+                    }
+                }
+            }            
+        }
+        
+        stage(&apos;Validando&apos;) {
+            steps {
+			    echo &apos;Validando...&apos;
+			    
+			     sshagent([&apos;login_ssh_servidor_si&apos;]) {
+                    script {
+                    retornoSh = sh(returnStdout: true, script: &quot;ssh -o StrictHostKeyChecking=no -l admin localhost &apos;cat /tmp/jenkins/$BUILD_TAG/SAIDA.report&apos; &quot;).trim()
+                    
+                   echo &quot;Retorno: ${retornoSh}&quot;
+			    } }
+			    
+                sshagent([&apos;login_ssh_servidor_si&apos;]) {
+                    script {
+                        
+                        try {
+                           sh(&quot;ssh -o StrictHostKeyChecking=no -l admin localhost &apos;cat /tmp/jenkins/$BUILD_TAG/SAIDA_COMMANDO.log | sed -E \&quot;s/Error..[2].//\&quot; | if grep -qiw \&quot;Error &apos;1&apos;\&quot;; then exit 1; else exit 0; fi&apos; &quot;)
+                        } catch (err) {
+                            print(&apos;ERROR: &apos; + err.toString() )
+                            error &apos;ERRO ao realizar o B2Bi import.sh &apos;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}</script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>

@@ -1,0 +1,89 @@
+pipeline {
+    
+   
+    agent any
+    options {
+      timeout(time: 2, unit: 'MINUTES') 
+    }
+    environment {
+        unique_Id = UUID.randomUUID().toString()
+    }
+    parameters {
+        gitParameter name: 'Versao',
+                     type: 'PT_TAG',
+                     defaultValue: 'Projeto_Inicial',
+                     sortMode: 'DESCENDING_SMART'
+    }
+    stages {
+        stage('Checkout - Tag') {
+            
+            steps {
+                
+                checkout([$class: 'GitSCM',
+				branches: [[name: "${params.Versao}"]],
+				doGenerateSubmoduleConfigurations: false,
+				extensions: [],
+				gitTool: 'Default',
+				submoduleCfg: [],
+				userRemoteConfigs: [[url: 'https://github.com/javaaurelio/B2BProjetos_Deploy.git']]])
+            }
+        }
+		stage('Pre-Configuracao') {
+            steps {
+                
+                echo 'Criando diretorio temp...'
+			    sshagent(['login_fabio']) {
+                    sh "ssh -o StrictHostKeyChecking=no -l admin bastion-gym-lan 'mkdir -p /tmp/jenkins/$BUILD_TAG ' "
+			    }
+            
+			    echo 'Enviando arquivo para servidor...'
+			    sshagent(['login_fabio']) {
+                    sh "scp Projeto_Inicial_Export.xml admin@bastion-gym-lan:/tmp/jenkins/$BUILD_TAG/Export.xml "
+			    }
+            }
+        }
+    stage('Publicando') {
+            steps {
+                sshagent(['login_fabio']) {
+                    script {
+                        
+                        try {
+                           
+                               sh("ssh -o StrictHostKeyChecking=no -l admin localhost '/opt/IBM/SI62/tp_import/import.sh -numberOfThreads 5 -update -input /tmp/jenkins/$BUILD_TAG/Export.xml -report /tmp/jenkins/$BUILD_TAG/SAIDA.report > /tmp/jenkins/$BUILD_TAG/SAIDA_COMMANDO.log | exit 0; '")
+                                             
+                          
+                        } catch (err) {
+                            print('ERROR: ' + err.toString() )
+                            error 'ERRO ao executar script B2Bi import.sh '
+                        }
+                    }
+                }
+            }            
+        }
+        
+        stage('Validando') {
+            steps {
+			    echo 'Validando...'
+			    
+			     sshagent(['login_fabio']) {
+                    script {
+                    retornoSh = sh(returnStdout: true, script: "ssh -o StrictHostKeyChecking=no -l admin localhost 'cat /tmp/jenkins/$BUILD_TAG/SAIDA.report' ").trim()
+                    
+                   echo "Retorno: ${retornoSh}"
+			    } }
+			    
+                sshagent(['login_fabio']) {
+                    script {
+                        
+                        try {
+                           sh("ssh -o StrictHostKeyChecking=no -l admin localhost 'cat /tmp/jenkins/$BUILD_TAG/SAIDA_COMMANDO.log | sed -E \"s/Error..[2].//\" | if grep -qiw \"Error '1'\"; then exit 1; else exit 0; fi' ")
+                        } catch (err) {
+                            print('ERROR: ' + err.toString() )
+                            error 'ERRO ao realizar o B2Bi import.sh '
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
